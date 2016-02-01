@@ -10,7 +10,9 @@
            :yield
            :coexit
            :make-coroutine
-           :with-coroutine)
+           :with-coroutine
+	   :this-coro
+	   )
   (:import-from :alexandria
                 :with-gensyms))
 (in-package :cl-coroutine)
@@ -22,62 +24,65 @@
 
 (defmacro defcoroutine (name (&optional arg) &body body)
   (if arg
-      (defcoroutine/arg name arg body)
-      (defcoroutine/no-arg name body)))
+      (defcoroutine-util name body arg)
+      (defcoroutine-util name body)))
 
-(defun defcoroutine/arg (name arg body)
-  (alexandria:with-gensyms (cont)
-    `(progn
-       (setf (get ',name 'make-coroutine)
-             #'(lambda ()
-                 (let (,cont)
-                   #'(lambda (,arg)
-                       (if ,cont
-                         (funcall ,cont ,arg)
-                         (cl-cont:with-call/cc
-                           (macrolet ((yield (&optional result)
-                                        (with-gensyms (cc)
-                                          `(setf ,',arg
-                                                 (cl-cont:let/cc ,cc
-                                                   (setf ,',cont ,cc)
-                                                   ,result))))
-                                      (coexit (&optional result)
-                                        `(cl-cont:let/cc _
-                                           (declare (ignorable _))
-                                           (setf ,',cont
-                                                 #'(lambda (_)
-                                                     (declare (ignorable _))
-                                                     (values)))
-                                           ,result)))
-                             ,@body
-                             (coexit nil))))))))
-       ',name)))
+(defun coroutine-underlying-lambda (name body &optional (arg nil arg-p))
+  (with-gensyms (cont x it coro)
+    (let ((name (or name (gensym "CORO-NAME"))))
+      `(let (,cont)
+	 (let ((,coro #'(lambda ,(if arg-p `(,arg))
+			(if ,cont
+			    (funcall ,cont ,@(if arg-p `(,arg)))
+			    (cl-cont:with-call/cc
+			      (macrolet ((yield (&optional result)
+					   (with-gensyms (cc)
+					     ,(if arg-p
+						  ``(setf ,',arg
+							  (cl-cont:let/cc ,cc
+							    (setf ,',cont ,cc)
+							    ,result))
+						  ``(cl-cont:let/cc ,cc
+						      (setf ,',cont ,cc)
+						      ,result))))
+					 (coexit (&optional result)
+					   `(cl-cont:let/cc _
+					      (declare (ignorable _))
+					      (setf ,',cont
+						    #'(lambda (_)
+							(declare (ignorable _))
+							(values)))
+					      ,result)))
+				(flet ((,name ,(if arg-p `(,x))
+					 (funcall ,cont ,@(if arg-p `(,x)))))
+				  ;; A KLUDGE to make CONT be always set inside BODY,
+				  ;; so the FLET above works also at the "first" invocation of the coroutine
+				  (let ((,it (yield nil)))
+				    ,@body)
+				  (coexit nil))))))))
+	   (funcall ,coro ,@(if arg-p `(nil)))
+	   ,coro)))))
+  
+(defun defcoroutine-util (name body &optional (arg nil arg-p))
+  `(progn
+     (setf (get ',name 'make-coroutine)
+	   #'(lambda ()
+	       ,(if arg-p
+		    (coroutine-underlying-lambda name body arg)
+		    (coroutine-underlying-lambda name body))))
+     ',name))
 
-(defun defcoroutine/no-arg (name body)
-  (alexandria:with-gensyms (cont)
-    `(progn
-       (setf (get ',name 'make-coroutine)
-             #'(lambda ()
-                 (let (,cont)
-                   #'(lambda ()
-                       (if ,cont
-                         (funcall ,cont)
-                         (cl-cont:with-call/cc
-                           (macrolet ((yield (&optional result)
-                                        (with-gensyms (cc)
-                                          `(cl-cont:let/cc ,cc
-                                             (setf ,',cont ,cc)
-                                             ,result)))
-                                      (coexit (&optional result)
-                                        `(cl-cont:let/cc _
-                                           (declare (ignorable _))
-                                           (setf ,',cont
-                                                 #'(lambda ()
-                                                     (values)))
-                                           ,result)))
-                             ,@body
-                             (coexit nil))))))))
-       ',name)))
+(defmacro lambda-coro (arg &body body)
+  (with-gensyms (g!-name)
+    (if arg
+	(coroutine-underlying-lambda g!-name body (car arg))
+	(coroutine-underlying-lambda g!-name body))))
+
+;; OK, this is clearly not the final form of this macro... but let's start somewhere
+(defmacro label-coro (name arg &body body)
+  (if arg
+      (coroutine-underlying-lambda (or name 'this-coro) body (car arg))
+      (coroutine-underlying-lambda (or name 'this-coro) body)))
 
 
 ;;;

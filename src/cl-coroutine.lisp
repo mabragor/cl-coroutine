@@ -36,33 +36,28 @@
 			    (funcall ,cont ,@(if arg-p `(,arg)))
 			    (cl-cont:with-call/cc
 			      (macrolet ((yield (&optional result)
-					   (with-gensyms (cc g!-res)
+					   (with-gensyms (cc)
 					     ,(if arg-p
 						  ``(setf ,',arg
 							  (cl-cont:let/cc ,cc
-							    (let ((,g!-res ,result))
-							      (setf ,',cont ,cc)
-							      ,g!-res)))
+							    (setf ,',cont ,cc)
+							    ,result))
 						  ``(cl-cont:let/cc ,cc
-						      (let ((,g!-res ,result))
-							(setf ,',cont ,cc)
-							,g!-res)))))
+						      (setf ,',cont ,cc)
+						      ,result))))
 					 (coexit (&optional result)
-					   (with-gensyms (g!-res)
-					     `(cl-cont:let/cc _
-						(declare (ignorable _))
-						(let ((,g!-res ,result))
-						  (setf ,',cont
-							#'(lambda (_)
-							    (declare (ignorable _))
-							    (values)))
-						  ,g!-res))))
+					   `(cl-cont:let/cc _
+					      (declare (ignorable _))
+					      (setf ,',cont
+						    #'(lambda (_)
+							(declare (ignorable _))
+							(values)))
+					      ,result))
 					 (,name () ',cont))
 				;; A KLUDGE to make CONT be always set inside BODY,
 				;; so the FLET above works also at the "first" invocation of the coroutine
-				(let ((,it (yield nil)))
-				  (declare (ignore ,it))
-				  ,@body)
+				(yield nil)
+				,@body
 				(coexit nil)))))))
 	   (funcall ,coro ,@(if arg-p `(nil)))
 	   ,coro)))))
